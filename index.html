@@ -116,6 +116,18 @@ h2 { margin: 0; font-size: 16px; font-weight: 700; }
 .empty { color: var(--muted); font-size: 14px; }
 .btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .confirm { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; font-size: 14px; }
+.hist { display: flex; flex-direction: column; gap: 8px; }
+.hist details { border: 1px solid var(--line); border-radius: 10px; background: var(--field); }
+.hist summary { cursor: pointer; padding: 10px 12px; display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: baseline; list-style: none; }
+.hist summary::-webkit-details-marker { display: none; }
+.hist summary::before { content: "▸"; color: var(--muted); }
+.hist details[open] summary::before { content: "▾"; }
+.hist summary b { overflow-wrap: anywhere; }
+.hist .body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.hist .line { overflow-wrap: anywhere; }
+.hist .line b { color: var(--forest); }
+.hist .btns { justify-content: flex-start; margin-top: 4px; }
+.tag { font-size: 12px; background: var(--soft); color: #8e6c2a; padding: 0 8px; border-radius: 999px; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 14px; max-width: calc(100% - 32px); z-index: 9; }
 @media (prefers-reduced-motion: reduce) { .reel.hit .nm { animation: none; } }
 </style>
@@ -172,13 +184,19 @@ h2 { margin: 0; font-size: 16px; font-weight: 700; }
         <div class="btns" id="actions">
           <button id="excel" class="primary">下載 Excel</button>
           <button id="copy">複製名單</button>
-          <button id="reset">重新抽獎</button>
+          <button id="reset">重設</button>
         </div>
         <div class="confirm" id="confirm" hidden>
-          確定清除所有中獎結果？
-          <button id="resetYes">清除</button>
+          要清除什麼？
+          <button id="resetYes">只清中獎結果</button>
+          <button id="wipeYes">全部清空</button>
           <button id="resetNo">取消</button>
         </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>最近 5 次抽獎紀錄</h2><span class="meta">存在這台電腦的瀏覽器</span></div>
+        <div class="hist" id="history"></div>
       </section>
     </div>
   </div>
@@ -187,17 +205,32 @@ h2 { margin: 0; font-size: 16px; font-weight: 700; }
 
 <script>
 (() => {
-  const KEY = 'luckydraw-v3';
-  const SAMPLE = ['@amy_chen','@kevin.lin','@小雨','@jason_wu','@momo_tw','@阿哲','@ivy.huang','@pinky_lee','@大熊','@ruby_tsai','@tommy_yang','@芊芊','@leo_hsu','@nana_cheng','@阿凱','@mia_lai','@寶寶不哭','@eric_ko','@小魚','@joy_lu'];
+  const KEY = 'luckydraw-v4';
   const uid = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   let S;
   try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
   if (!S || !Array.isArray(S.prizes)) S = {
-    title: '粉專留言抽獎',
-    prizes: [{ id: 'a', name: '頭獎：3,000 元禮券', count: 1 }, { id: 'b', name: '貳獎：1,000 元禮券', count: 2 }, { id: 'c', name: '參獎：100 元禮券', count: 5 }],
-    people: SAMPLE.join('\n'), sample: true, dedupe: true, mode: 'one', current: 'a', results: [], out: []
+    title: '',
+    prizes: [{ id: 'a', name: '', count: 1 }],
+    people: '', sample: false, dedupe: true, mode: 'one', current: 'a', results: [], out: []
   };
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  if (!S.session) S.session = uid();
+  const HKEY = 'luckydraw-history';
+  let H; try { H = JSON.parse(localStorage.getItem(HKEY)); } catch (e) { H = null; }
+  if (!Array.isArray(H)) H = [];
+  const saveH = () => { try { localStorage.setItem(HKEY, JSON.stringify(H)); } catch (e) {} };
+  // 每一次抽獎（從開始到按重設）算一筆紀錄，自動更新，只留最近 5 筆
+  function syncHistory() {
+    H = H.filter(h => h.id !== S.session);
+    if (S.results.length) H.push({
+      id: S.session, title: S.title,
+      t: S.results.reduce((m, r) => (r.t > m ? r.t : m), ''),
+      prizes: S.prizes.map(p => ({ name: p.name, winners: S.results.filter(r => r.prizeId === p.id).map(r => ({ name: r.name, t: r.t })) })).filter(p => p.winners.length)
+    });
+    H.sort((a, b) => (a.t < b.t ? 1 : -1));
+    H = H.slice(0, 5); saveH(); renderHistory();
+  }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} syncHistory(); };
   const $ = id => document.getElementById(id);
   const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 
@@ -303,10 +336,10 @@ h2 { margin: 0; font-size: 16px; font-weight: 700; }
       g.append(h, chips); box.append(g);
     });
     $('excel').disabled = $('copy').disabled = !S.results.length;
-    $('reset').disabled = busy || (!S.results.length && !S.out.length);
+    $('reset').disabled = busy;
   }
 
-  function renderAll() { renderPrizes(); renderMeta(); renderStage(); renderResults(); idle(); }
+  function renderAll() { renderPrizes(); renderMeta(); renderStage(); renderResults(); renderHistory(); idle(); }
 
   // ---------- 抽獎 ----------
   // 不重複抽出 k 人
@@ -382,14 +415,14 @@ h2 { margin: 0; font-size: 16px; font-weight: 700; }
   // 頁面內：透過 downloads 能力存檔；直接用瀏覽器開本機檔：用一般下載連結
   let dl = null;
   if (window.claude && window.claude.use) window.claude.use('downloads').then(d => { dl = d; }).catch(() => {});
-  $('excel').addEventListener('click', async () => {
+  async function exportXlsx(title, list) {
     if (!window.XLSX) return toast('Excel 元件沒有載入，請確認網路連線後重新整理');
-    const aoa = [[S.title || '抽獎'], [`匯出時間：${fmtTime(new Date().toISOString())}`], [], ['獎項', '序號', '得獎者', '抽出時間'], ...rows()];
+    const aoa = [[title || '抽獎'], [`匯出時間：${fmtTime(new Date().toISOString())}`], [], ['獎項', '序號', '得獎者', '抽出時間'], ...list];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = [{ wch: 28 }, { wch: 6 }, { wch: 24 }, { wch: 20 }];
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '得獎名單');
     const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-    const name = ((S.title || '抽獎').replace(/[\\/:*?"<>|]+/g, ' ').trim() || '抽獎') + '_得獎名單.xlsx';
+    const name = ((title || '抽獎').replace(/[\\/:*?"<>|]+/g, ' ').trim() || '抽獎') + '_得獎名單.xlsx';
     if (dl) {
       try { await dl.save({ filename: name, data: new Blob([buf]) }); toast('已下載 Excel'); }
       catch (e) { if (e && e.code !== 'declined') toast('這裡無法下載檔案，請改用「複製名單」'); }
@@ -398,15 +431,43 @@ h2 { margin: 0; font-size: 16px; font-weight: 700; }
     const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     const a = el('a'); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-  });
-
+  }
+  function copyText(text) {
+    const fb = () => { const ta = el('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.append(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.remove(); toast(ok ? '已複製得獎名單' : '無法自動複製，請手動選取'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => toast('已複製得獎名單'), fb); else fb();
+  }
+  const histRows = h => { const out = []; h.prizes.forEach(p => p.winners.forEach((w, i) => out.push([p.name, i + 1, w.name, fmtTime(w.t)]))); return out; };
+  const histText = h => [(h.title || '抽獎') + ' 得獎名單'].concat(h.prizes.map(p => `【${p.name}】${p.winners.map(w => w.name).join('、')}`)).join('\n');
+  $('excel').addEventListener('click', () => exportXlsx(S.title, rows()));
   $('copy').addEventListener('click', () => {
     const lines = [(S.title || '抽獎') + ' 得獎名單'];
     S.prizes.forEach(p => { const ns = S.results.filter(r => r.prizeId === p.id).map(r => r.name); if (ns.length) lines.push(`【${p.name}】${ns.join('、')}`); });
-    const text = lines.join('\n');
-    const fb = () => { const ta = el('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.append(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.remove(); toast(ok ? '已複製得獎名單' : '無法自動複製，請手動選取'); };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => toast('已複製得獎名單'), fb); else fb();
+    copyText(lines.join('\n'));
   });
+
+  const openH = new Set();
+  function renderHistory() {
+    const box = $('history'); box.textContent = '';
+    if (!H.length) { box.append(el('div', 'empty', '抽出得獎者後會自動存一筆，最多保留最近 5 次。')); return; }
+    H.forEach(h => {
+      const d = el('details'); d.open = openH.has(h.id);
+      d.addEventListener('toggle', () => { d.open ? openH.add(h.id) : openH.delete(h.id); });
+      const n = h.prizes.reduce((s, p) => s + p.winners.length, 0);
+      const sm = el('summary');
+      sm.append(el('b', null, h.title || '（未命名抽獎）'), el('span', 'meta', `${fmtTime(h.t)}・${n} 位得獎`));
+      if (h.id === S.session) sm.append(el('span', 'tag', '目前這次'));
+      const body = el('div', 'body');
+      h.prizes.forEach(p => { const ln = el('div', 'line'); ln.append(el('b', null, `【${p.name || '未命名'}】`), document.createTextNode(p.winners.map(w => w.name).join('、'))); body.append(ln); });
+      const bt = el('div', 'btns');
+      const x = el('button', null, '下載 Excel'); x.addEventListener('click', () => exportXlsx(h.title, histRows(h)));
+      const c = el('button', null, '複製名單'); c.addEventListener('click', () => copyText(histText(h)));
+      const del = el('button', null, '刪除這筆');
+      del.disabled = h.id === S.session; del.title = del.disabled ? '這是目前正在抽的結果，按「重設」後才能刪除' : '';
+      del.addEventListener('click', () => { H = H.filter(y => y.id !== h.id); saveH(); renderHistory(); toast('已刪除這筆紀錄'); });
+      bt.append(x, c, del); body.append(bt);
+      d.append(sm, body); box.append(d);
+    });
+  }
 
   // ---------- 事件 ----------
   $('title').value = S.title; $('people').value = S.people; $('dedupe').checked = S.dedupe;
@@ -421,7 +482,12 @@ h2 { margin: 0; font-size: 16px; font-weight: 700; }
   $('go').addEventListener('click', draw);
   $('reset').addEventListener('click', () => { $('actions').hidden = true; $('confirm').hidden = false; $('resetNo').focus(); });
   $('resetNo').addEventListener('click', () => { $('actions').hidden = false; $('confirm').hidden = true; });
-  $('resetYes').addEventListener('click', () => { S.results = []; S.out = []; S.current = S.prizes[0].id; save(); $('actions').hidden = false; $('confirm').hidden = true; renderAll(); toast('已清除，可以重新抽'); });
+  $('resetYes').addEventListener('click', () => { S.session = uid(); S.results = []; S.out = []; S.current = S.prizes[0].id; save(); $('actions').hidden = false; $('confirm').hidden = true; renderAll(); toast('已清除，可以重新抽'); });
+  $('wipeYes').addEventListener('click', () => {
+    S = { title: '', prizes: [{ id: uid(), name: '', count: 1 }], people: '', sample: false, dedupe: S.dedupe, mode: S.mode, current: '', results: [], out: [], session: uid() };
+    S.current = S.prizes[0].id; save();
+    $('title').value = ''; $('people').value = ''; $('actions').hidden = false; $('confirm').hidden = true; renderAll(); toast('已全部清空');
+  });
 
   let tt;
   function toast(m) { const t = $('toast'); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => { t.hidden = true; }, 2600); }
